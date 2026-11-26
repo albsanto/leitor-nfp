@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0d1117">
+<title>Leitor NFP — câmera contínua</title>
+<style>
+:root{--bg:#0d1117;--paper:#161b22;--ink:#e9edf2;--mute:#8b95a3;--line:#2a313b;--acc:#3b82f6;--ok:#34d399;--warn:#f5b041;--bad:#ff7b72}
+*{box-sizing:border-box;min-width:0}
+[hidden]{display:none!important}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.cam{position:relative;width:100%;height:58vh;min-height:300px;background:#000;overflow:hidden}
+video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.frame{position:absolute;left:50%;top:50%;width:min(70vw,320px);aspect-ratio:1;transform:translate(-50%,-50%);border-radius:18px;
+border:3px solid rgba(255,255,255,.85);pointer-events:none}
+.frame.hit{border-color:var(--ok);border-width:6px}
+.frame.dup{border-color:var(--warn)}
+.hud{position:absolute;left:0;right:0;top:0;display:flex;justify-content:space-between;align-items:center;padding:calc(env(safe-area-inset-top) + 10px) 12px 10px;
+background:linear-gradient(#000a,#0000)}
+.count{font-weight:800;font-size:28px;line-height:1}.count small{display:block;font-size:12px;font-weight:500;color:#cfd6df}
+.ibtn{min-width:48px;height:48px;border-radius:14px;border:0;background:rgba(255,255,255,.16);color:#fff;font:600 15px inherit;padding:0 12px;cursor:pointer}
+.ibtn[aria-pressed=true]{background:#fff;color:#000}
+.toast{position:absolute;left:12px;right:12px;bottom:12px;padding:12px 14px;border-radius:14px;background:rgba(13,17,23,.88);font-size:15px;min-height:48px}
+.toast b{font-family:ui-monospace,Menlo,Consolas,monospace;font-weight:600;font-size:13px;word-break:break-all;display:block}
+.start{position:absolute;inset:0;display:flex;flex-direction:column;gap:14px;align-items:center;justify-content:center;background:#0d1117;padding:24px;text-align:center}
+.start h1{margin:0;font-size:28px;line-height:1.1}
+.start p{margin:0;color:var(--mute);max-width:420px}
+.go{min-height:60px;padding:0 28px;border-radius:18px;border:0;background:var(--acc);color:#fff;font:800 20px inherit;cursor:pointer}
+main{padding:14px 14px calc(env(safe-area-inset-bottom) + 28px);max-width:680px;margin:0 auto}
+.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px}
+.stat{background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:8px 10px}
+.stat b{font-size:22px;display:block}.stat span{font-size:12px;color:var(--mute)}
+.stat.w b{color:var(--warn)}.stat.x b{color:var(--bad)}.stat.o b{color:var(--ok)}
+.actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:12px}
+.btn{min-height:46px;border-radius:12px;border:1px solid var(--line);background:var(--paper);color:var(--ink);font:600 15px inherit;cursor:pointer}
+.btn.danger{color:var(--bad)}
+.item{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;padding:10px 0;border-bottom:1px dashed var(--line)}
+.key{font:500 13.5px/1.4 ui-monospace,Menlo,Consolas,monospace;word-break:break-all}
+.meta{font-size:12.5px;color:var(--mute)}.meta .o{color:var(--ok)}.meta .w{color:var(--warn)}.meta .x{color:var(--bad)}
+.del{width:44px;height:44px;border:0;background:transparent;color:var(--mute);font-size:22px;cursor:pointer;grid-row:1/3;grid-column:2}
+.empty{color:var(--mute);text-align:center;padding:20px}
+.msg{font-size:14px;color:var(--mute);min-height:20px;margin:0 0 10px}
+</style>
+</head>
+<body>
+<section class="cam" id="camBox">
+  <video id="video" autoplay playsinline muted></video>
+  <div class="frame" id="frame"></div>
+  <div class="hud">
+    <div class="count"><span id="hudCount">0</span><small>chaves lidas</small></div>
+    <div style="display:flex;gap:8px">
+      <button class="ibtn" id="torch" aria-pressed="false" hidden>Lanterna</button>
+      <button class="ibtn" id="pause" aria-pressed="false">Pausar</button>
+    </div>
+  </div>
+  <div class="toast" id="toast">Aponte para o QR Code do cupom.</div>
+  <div class="start" id="start">
+    <h1>Leitor de cupons NFP</h1>
+    <p>A câmera fica aberta e cada QR Code lido entra na lista automaticamente, com bipe e vibração. É só ir passando os cupons.</p>
+    <button class="go" id="go">Abrir câmera</button>
+    <p id="startErr" style="color:var(--bad)"></p>
+    <p style="font-size:12px">versão 6</p>
+  </div>
+</section>
+
+<main>
+  <div class="stats">
+    <div class="stat o"><b id="sPend">0</b><span>no prazo</span></div>
+    <div class="stat w"><b id="sSoon">0</b><span>vencem em ≤5 dias</span></div>
+    <div class="stat x"><b id="sLate">0</b><span>fora do prazo</span></div>
+  </div>
+  <p class="msg" id="msg"></p>
+  <div class="actions">
+    <button class="btn" id="share">Enviar lista</button>
+    <button class="btn" id="copy">Copiar chaves</button>
+    <button class="btn" id="csv">Baixar CSV</button>
+    <button class="btn danger" id="clear">Limpar lista</button>
+  </div>
+  <div id="list"></div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<script>
+{
+const $=id=>document.getElementById(id);
+const LS='nfp-leitor-live-v1';
+let items=[];try{items=JSON.parse(localStorage.getItem(LS)||'[]').filter(r=>r&&/^\d{44}$/.test(r.chave))}catch(e){items=[]}
+const save=()=>{try{localStorage.setItem(LS,JSON.stringify(items))}catch(e){}};
+
+/* ---- chave ---- */
+function dvOk(k){let s=0,w=2;for(let i=42;i>=0;i--){s+=+k[i]*w;w=w===9?2:w+1}const r=s%11;return (r<2?0:11-r)===+k[43]}
+function extractKey(text){const t=String(text||'');
+  for(const m of t.matchAll(/\d{44,}/g)){const run=m[0];for(let i=0;i+44<=run.length;i++){const k=run.slice(i,i+44);if(dvOk(k))return k}}
+  const d=t.replace(/\D/g,'');return d.length===44&&dvOk(d)?d:null}
+const MOD={'59':'CF-e SAT','65':'NFC-e','55':'NF-e'};
+function info(k){const mm=+k.slice(4,6),y=2000+ +k.slice(2,4);const dl=new Date(y,mm,20,23,59,59);const t=new Date();t.setHours(0,0,0,0);
+  return {uf:k.slice(0,2),mod:MOD[k.slice(20,22)]||'modelo '+k.slice(20,22),emis:String(mm).padStart(2,'0')+'/'+y,prazo:dl.toLocaleDateString('pt-BR'),days:Math.ceil((dl-t)/864e5)}}
+const fmt=k=>k.replace(/(\d{4})/g,'$1 ').trim();
+
+/* ---- feedback ---- */
+let actx=null;
+function beep(ok){try{if(!actx)return;const o=actx.createOscillator(),g=actx.createGain();o.frequency.value=ok?1250:420;o.type='square';
+  g.gain.setValueAtTime(.12,actx.currentTime);g.gain.exponentialRampToValueAtTime(.0001,actx.currentTime+(ok?.12:.25));o.connect(g).connect(actx.destination);o.start();o.stop(actx.currentTime+(ok?.13:.26))}catch(e){}}
+function vib(p){try{navigator.vibrate&&navigator.vibrate(p)}catch(e){}}
+let frameT;function flash(c){const f=$('frame');f.classList.remove('hit','dup');f.classList.add(c);clearTimeout(frameT);frameT=setTimeout(()=>f.classList.remove(c),500)}
+function toast(html){$('toast').innerHTML=html}
+
+/* ---- render ---- */
+function render(){
+  let p=0,s=0,l=0;items.forEach(r=>{const i=info(r.chave);if(i.days<0)l++;else{p++;if(i.days<=5)s++}});
+  $('sPend').textContent=p;$('sSoon').textContent=s;$('sLate').textContent=l;$('hudCount').textContent=items.length;
+  const L=$('list');L.textContent='';
+  if(!items.length){const e=document.createElement('div');e.className='empty';e.textContent='Nenhuma chave lida ainda.';L.append(e);return}
+  [...items].reverse().forEach(r=>{const i=info(r.chave),d=document.createElement('div');d.className='item';
+    const k=document.createElement('div');k.className='key';k.textContent=fmt(r.chave);
+    const m=document.createElement('div');m.className='meta';const b=document.createElement('span');
+    if(i.days<0){b.className='x';b.textContent='Fora do prazo ('+i.prazo+')'}else if(i.days<=5){b.className='w';b.textContent=i.days===0?'Vence hoje':'Vence em '+i.days+(i.days===1?' dia':' dias')}else{b.className='o';b.textContent='Prazo até '+i.prazo}
+    m.append(b,document.createTextNode(' · '+i.mod+' · '+i.emis+(i.uf!=='35'?' · NÃO É DE SP':'')));
+    const x=document.createElement('button');x.className='del';x.textContent='×';x.setAttribute('aria-label','Remover');
+    x.onclick=()=>{items=items.filter(it=>it.chave!==r.chave);save();render()};
+    d.append(k,x,m);L.append(d)});
+}
+
+/* ---- leitura ---- */
+let lastKey=null,lastSeen=0,dupWarned=new Map();
+function onText(text){
+  const k=extractKey(text);if(!k)return;
+  const now=Date.now();
+  /* o mesmo cupom continua na frente da câmera: ignora em silêncio */
+  if(k===lastKey){lastSeen=now;return}
+  lastKey=k;lastSeen=now;
+  if(items.some(r=>r.chave===k)){
+    if(now-(dupWarned.get(k)||0)<8000)return;dupWarned.set(k,now);
+    flash('dup');beep(false);vib([40,60,40]);toast('Já estava na lista<b>'+fmt(k)+'</b>');return}
+  items.push({chave:k,lidaEm:new Date().toISOString()});coolUntil=now+600;save();render();
+  const i=info(k);flash('hit');beep(true);vib(80);
+  toast((i.days<0?'⚠ Lida, mas FORA DO PRAZO':i.uf!=='35'?'⚠ Lida, mas não é de SP':'✓ Chave '+items.length+' salva')+'<b>'+fmt(k)+'</b>');
+}
+let stream=null,track=null,paused=false,detector=null,busy=false,starting=false,ticking=false;
+const video=$('video'),cv=document.createElement('canvas'),ctx=cv.getContext('2d',{willReadFrequently:true});
+/* leitura fora da thread principal: jsQR roda num Worker, a imagem da câmera não trava */
+/* Worker: recebe a imagem já recortada (ImageBitmap) e faz toda a leitura fora da thread da tela */
+let worker=null,workerBusy=false,workerOff=false;
+try{
+  const src="importScripts('https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js');"+
+    "var oc=null,ox=null;"+
+    "onmessage=function(e){var d=e.data,r=null;try{var px;"+
+    "if(d.bmp){if(!oc||oc.width!==d.w){oc=new OffscreenCanvas(d.w,d.h);ox=oc.getContext('2d',{willReadFrequently:true})}"+
+    "ox.drawImage(d.bmp,0,0);d.bmp.close();px=ox.getImageData(0,0,d.w,d.h).data}else{px=new Uint8ClampedArray(d.buf)}"+
+    "r=jsQR(px,d.w,d.h,{inversionAttempts:'dontInvert'})}catch(x){}postMessage(r?r.data:null)}";
+  worker=new Worker(URL.createObjectURL(new Blob([src],{type:'application/javascript'})));
+  worker.onmessage=e=>{workerBusy=false;if(e.data)onText(e.data)};
+  worker.onerror=()=>{workerOff=true;workerBusy=false};
+}catch(e){workerOff=true}
+const SCAN=400;            /* recorte central reduzido: menos pixels = mais rápido */
+const canBitmap=typeof createImageBitmap==='function'&&typeof OffscreenCanvas!=='undefined';
+let lastPlayTry=0,coolUntil=0;
+function crop(){const vw=video.videoWidth,vh=video.videoHeight,side=Math.round(Math.min(vw,vh)*.75);return [Math.round((vw-side)/2),Math.round((vh-side)/2),side,side]}
+function grab(){const c=crop();cv.width=SCAN;cv.height=SCAN;ctx.drawImage(video,c[0],c[1],c[2],c[3],0,0,SCAN,SCAN)}
+async function tick(){
+  if(video.paused&&stream&&Date.now()-lastPlayTry>1000){lastPlayTry=Date.now();const p=video.play();if(p&&p.catch)p.catch(()=>{})}
+  const now=Date.now();
+  /* cupom saiu da frente da câmera há 1,5 s: libera ler o mesmo de novo (para avisar duplicado) */
+  if(lastKey&&now-lastSeen>1500)lastKey=null;
+  if(!paused&&now>coolUntil&&video.readyState>=2&&video.videoWidth&&!document.hidden){
+    try{
+      if(worker&&!workerOff&&!workerBusy){
+        workerBusy=true;
+        if(canBitmap){const c=crop();const bmp=await createImageBitmap(video,c[0],c[1],c[2],c[3],{resizeWidth:SCAN,resizeHeight:SCAN,resizeQuality:'low'});
+          worker.postMessage({bmp,w:SCAN,h:SCAN},[bmp])}
+        else{grab();const d=ctx.getImageData(0,0,SCAN,SCAN);worker.postMessage({buf:d.data.buffer,w:SCAN,h:SCAN},[d.data.buffer])}
+      }else if((!worker||workerOff)&&detector&&!busy){busy=true;grab();const codes=await detector.detect(cv);codes.forEach(c=>onText(c.rawValue));busy=false}
+      else if((!worker||workerOff)&&!detector&&window.jsQR&&!busy){busy=true;grab();const d=ctx.getImageData(0,0,SCAN,SCAN);const r=jsQR(d.data,SCAN,SCAN,{inversionAttempts:'dontInvert'});if(r)onText(r.data);busy=false}
+    }catch(e){busy=false;workerBusy=false}
+  }
+  setTimeout(tick,220);
+}
+let wake=null;async function keepAwake(){try{wake=await navigator.wakeLock.request('screen')}catch(e){}}
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&stream)keepAwake()});
+$('go').onclick=async()=>{
+  try{actx=new (window.AudioContext||window.webkitAudioContext)();actx.resume()}catch(e){}
+  if(location.protocol!=='https:'&&!/^(localhost|127\.0\.0\.1)$/.test(location.hostname)){$('startErr').textContent='Este arquivo foi aberto direto do celular ('+location.protocol+'//). O Android bloqueia a câmera assim. Abra pelo link https:// (GitHub Pages) no Chrome.';return}
+  if(starting)return;starting=true;$('go').disabled=true;$('go').textContent='Abrindo…';$('startErr').textContent='';
+  try{
+    if(!stream||!stream.active)stream=await Promise.race([
+      navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720},frameRate:{ideal:30,max:30}},audio:false}),
+      new Promise((_,rej)=>setTimeout(()=>rej(new Error('a câmera não respondeu em 12 s. Feche outros apps que usam a câmera e recarregue a página.')),12000))]);
+    if(video.srcObject!==stream)video.srcObject=stream;
+    const p=video.play();if(p&&p.catch)p.catch(()=>{});
+    track=stream.getVideoTracks()[0];
+    $('start').hidden=true;keepAwake();if(!ticking){ticking=true;tick()}
+    /* ajustes opcionais em segundo plano — nunca travam a abertura */
+    try{const caps=track.getCapabilities?track.getCapabilities():{};if(caps.torch)$('torch').hidden=false}catch(e){}
+    try{if('BarcodeDetector' in window){Promise.race([BarcodeDetector.getSupportedFormats(),new Promise(r=>setTimeout(()=>r([]),2000))])
+      .then(f=>{if(f&&f.includes('qr_code'))detector=new BarcodeDetector({formats:['qr_code']})}).catch(()=>{})}}catch(e){}
+  }catch(e){starting=false;$('go').disabled=false;$('go').textContent='Abrir câmera';$('startErr').textContent=e&&e.name==='NotAllowedError'?'Câmera bloqueada. No Chrome: toque no cadeado ao lado do endereço → Permissões → Câmera → Permitir. Se não aparecer: Configurações do Android → Apps → Chrome → Permissões → Câmera → Permitir. Depois recarregue a página.':'Não foi possível abrir a câmera: '+(e&&e.message||e)}
+};
+$('pause').onclick=()=>{paused=!paused;$('pause').setAttribute('aria-pressed',paused);$('pause').textContent=paused?'Retomar':'Pausar';toast(paused?'Leitura pausada.':'Aponte para o QR Code do cupom.')};
+$('torch').onclick=async()=>{const on=$('torch').getAttribute('aria-pressed')!=='true';try{await track.applyConstraints({advanced:[{torch:on}]});$('torch').setAttribute('aria-pressed',on)}catch(e){}};
+
+/* ---- exportar ---- */
+const msg=t=>{$('msg').textContent=t};
+const pend=()=>items.filter(r=>info(r.chave).days>=0).map(r=>r.chave);
+function csv(){const rows=[['chave','modelo','emissao','prazo','status','lida_em']];
+  items.forEach(r=>{const i=info(r.chave);rows.push([r.chave,i.mod,i.emis,i.prazo,i.days<0?'fora do prazo':'no prazo',r.lidaEm])});
+  return '﻿'+rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(';')).join('\r\n')}
+$('copy').onclick=async()=>{const k=pend();if(!k.length)return msg('Nenhuma chave no prazo.');
+  try{await navigator.clipboard.writeText(k.join('\n'));msg(k.length+' chaves no prazo copiadas.')}catch(e){msg('Não foi possível copiar.')}};
+$('share').onclick=async()=>{if(!items.length)return msg('Lista vazia.');
+  const file=new File([csv()],'chaves_nfp.csv',{type:'text/csv'});
+  try{if(navigator.canShare&&navigator.canShare({files:[file]}))await navigator.share({files:[file],title:'Chaves NFP'});
+    else if(navigator.share)await navigator.share({title:'Chaves NFP',text:pend().join('\n')});
+    else{$('csv').click()}}catch(e){}};
+$('csv').onclick=()=>{if(!items.length)return msg('Lista vazia.');const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([csv()],{type:'text/csv'}));a.download='chaves_nfp_'+new Date().toISOString().slice(0,10)+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000)};
+let armed=false;$('clear').onclick=()=>{if(!armed){armed=true;$('clear').textContent='Toque de novo para apagar tudo';setTimeout(()=>{armed=false;$('clear').textContent='Limpar lista'},3000);return}
+  items=[];save();render();armed=false;$('clear').textContent='Limpar lista';msg('Lista apagada.')};
+render();
+}
+</script>
+</body>
+</html>
